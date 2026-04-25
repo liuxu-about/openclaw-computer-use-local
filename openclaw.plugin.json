@@ -1,0 +1,54 @@
+{
+  "id": "computer-use-local",
+  "name": "Computer Use (Local)",
+  "description": "Local OpenClaw computer-use bridge for AX-first macOS automation.",
+  "skills": [
+    "./skills"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "HTTP base URL for the local computer-use bridge, for example http://127.0.0.1:4458"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "default": 120000
+      },
+      "approvalMode": {
+        "type": "string",
+        "enum": ["strict", "normal"],
+        "default": "strict"
+      },
+      "allowVisionFallback": {
+        "type": "boolean",
+        "default": true
+      },
+      "includeScreenshotByDefault": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Bridge URL",
+      "help": "Local HTTP service that exposes /computer.observe, /computer.act, /computer.stop, and /computer.use"
+    },
+    "timeoutMs": {
+      "label": "Request timeout (ms)"
+    },
+    "approvalMode": {
+      "label": "Approval mode"
+    },
+    "allowVisionFallback": {
+      "label": "Allow vision fallback"
+    },
+    "includeScreenshotByDefault": {
+      "label": "Include screenshot by default"
+    }
+  }
+}

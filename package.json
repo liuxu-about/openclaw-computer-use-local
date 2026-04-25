@@ -1,0 +1,42 @@
+{
+  "name": "@liuxu/openclaw-computer-use-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local OpenClaw computer-use plugin scaffold for macOS Accessibility-first automation.",
+  "type": "module",
+  "files": [
+    "src",
+    "skills",
+    "docs",
+    "README.md",
+    "openclaw.plugin.json",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "check:all": "npm run check && swift build --package-path ./helper-swift",
+    "helper:build": "swift build --package-path ./helper-swift",
+    "helper:health": "swift run --package-path ./helper-swift openclaw-computer-helper health",
+    "bridge": "node ./bridge/server.mjs",
+    "bridge:start": "./scripts/run-bridge.sh"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

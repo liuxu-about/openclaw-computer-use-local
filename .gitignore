@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+dist/
+coverage/
+*.log
+tmp/
+__pycache__/
+*.pyc
+.swiftpm/
+helper-swift/.build/
