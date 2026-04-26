@@ -1,0 +1,20 @@
+{
+  "name": "computer_use_execute_scroll",
+  "endpoint": "use",
+  "enabled_env": "COMPUTER_USE_EVAL_ACTIONS",
+  "request": {
+    "task": "scroll down",
+    "target_app": "Codex",
+    "allow_vision_fallback": false,
+    "auto_execute": true,
+    "max_steps": 2
+  },
+  "success_checks": [
+    { "type": "has_session_id" },
+    { "type": "has_session_context" },
+    { "type": "has_steps_min", "value": 5 },
+    { "type": "has_planned_actions_min", "value": 1 },
+    { "type": "risk_level_in", "value": ["low"] },
+    { "type": "status_in", "value": ["completed_step", "needs_recovery"] }
+  ]
+}

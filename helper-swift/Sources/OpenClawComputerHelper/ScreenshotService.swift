@@ -60,6 +60,18 @@ final class ScreenshotService {
         guard shouldCapture(for: request) else {
             return (nil, nil)
         }
+        if rawScreenshotPersistenceDisabled {
+            let reason = enabled(ProcessInfo.processInfo.environment["COMPUTER_USE_REDACT_SCREENSHOTS"])
+                ? "screenshot_redaction_enabled"
+                : "screenshot_persistence_disabled"
+            eventLogger.log("helper_screenshot_capture_skipped", payload: [
+                "target_app": target?.appName as Any,
+                "target_bundle_id": target?.bundleId as Any,
+                "target_window": target?.windowTitle as Any,
+                "reason": reason,
+            ])
+            return (nil, reason)
+        }
 
         do {
             let artifact = try await capture(target: target, screen: screen)
@@ -82,6 +94,19 @@ final class ScreenshotService {
             ])
             return (nil, message)
         }
+    }
+
+    private var rawScreenshotPersistenceDisabled: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return enabled(env["COMPUTER_USE_DISABLE_SCREENSHOT_PERSISTENCE"])
+            || enabled(env["COMPUTER_USE_REDACT_SCREENSHOTS"])
+    }
+
+    private func enabled(_ value: String?) -> Bool {
+        guard let value else {
+            return false
+        }
+        return ["1", "true", "yes", "on"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     private func capture(target: TargetContext?, screen: ScreenInfo) async throws -> ScreenshotArtifact {

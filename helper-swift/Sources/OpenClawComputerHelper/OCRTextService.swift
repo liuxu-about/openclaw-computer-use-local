@@ -56,6 +56,37 @@ final class OCRTextService {
         }
     }
 
+    func matches(screenshot: ScreenshotArtifact, limit: Int = 80) -> [OCRTextMatch] {
+        guard let image = loadImage(from: screenshot.path) else {
+            eventLogger.log("helper_ocr_failed", payload: [
+                "path": screenshot.path,
+                "reason": "image_load_failed",
+            ])
+            return []
+        }
+
+        do {
+            let matches = try recognizeText(in: image)
+                .sorted { lhs, rhs in
+                    if lhs.confidence == rhs.confidence {
+                        return lhs.boundingBox.minY < rhs.boundingBox.minY
+                    }
+                    return lhs.confidence > rhs.confidence
+                }
+            eventLogger.log("helper_ocr_scan", payload: [
+                "path": screenshot.path,
+                "match_count": matches.count,
+            ])
+            return Array(matches.prefix(max(0, limit)))
+        } catch {
+            eventLogger.log("helper_ocr_failed", payload: [
+                "path": screenshot.path,
+                "reason": error.localizedDescription,
+            ])
+            return []
+        }
+    }
+
     func bestMatch(query: String, within targetFrame: CGRect?) -> OCRTextMatch? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {

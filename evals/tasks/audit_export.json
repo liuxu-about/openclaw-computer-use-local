@@ -1,0 +1,11 @@
+{
+  "name": "computer_audit_export",
+  "endpoint": "audit_export",
+  "request": {
+    "limit": 5
+  },
+  "success_checks": [
+    { "type": "ok" },
+    { "type": "has_audit_export_path" }
+  ]
+}

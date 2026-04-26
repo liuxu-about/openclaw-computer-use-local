@@ -1,0 +1,15 @@
+{
+  "name": "computer_cleanup_dry_run",
+  "endpoint": "cleanup",
+  "request": {
+    "dry_run": true,
+    "older_than_seconds": 0,
+    "max_screenshots": 0,
+    "audit_retention_days": 1
+  },
+  "success_checks": [
+    { "type": "ok" },
+    { "type": "has_cleanup_summary" },
+    { "type": "is_dry_run" }
+  ]
+}

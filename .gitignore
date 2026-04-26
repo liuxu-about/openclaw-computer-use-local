@@ -4,6 +4,7 @@ node_modules/
 .env.*
 dist/
 coverage/
+evals/report.json
 *.log
 tmp/
 __pycache__/

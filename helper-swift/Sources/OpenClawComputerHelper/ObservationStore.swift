@@ -6,6 +6,7 @@ final class ObservationStore {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let isoFormatter = ISO8601DateFormatter()
+    private let fingerprintBuilder = ElementFingerprintBuilder()
 
     init() {
         directory = FileManager.default.temporaryDirectory
@@ -23,11 +24,20 @@ final class ObservationStore {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
             let stored = StoredObservation(
                 observationId: observation.observationId,
+                sessionId: observation.sessionId,
                 bundleId: bundleId,
                 activeApp: observation.activeApp,
                 activeWindow: observation.activeWindow,
                 elements: observation.elements,
+                elementFingerprints: fingerprintBuilder.fingerprints(
+                    tree: observation.tree,
+                    elements: observation.elements
+                ),
+                uiSummary: observation.uiSummary,
+                recommendedTargets: observation.recommendedTargets,
                 screenshot: observation.screenshot,
+                overlay: observation.overlay,
+                sceneDigest: observation.sceneDigest,
                 createdAt: isoFormatter.string(from: Date())
             )
             let data = try encoder.encode(stored)

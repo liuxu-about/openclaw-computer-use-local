@@ -119,6 +119,17 @@ final class AccessibilityService: @unchecked Sendable {
         return (app.localizedName ?? "Unknown", app.bundleIdentifier ?? "unknown")
     }
 
+    func frontmostWindowInfo() -> (name: String, bundleId: String, windowTitle: String?) {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return ("Unknown", "unknown", nil)
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        applyMessagingTimeout(appElement, timeout: resolveMessagingTimeout)
+        let window = elementValue(appElement, attribute: kAXFocusedWindowAttribute as CFString)
+        let title = window.flatMap { stringValue($0, attribute: kAXTitleAttribute as CFString) }
+        return (app.localizedName ?? "Unknown", app.bundleIdentifier ?? "unknown", title)
+    }
+
     func resolveTarget(named query: String?, windowNamed windowQuery: String? = nil) -> TargetContext? {
         let startedAt = Date()
         eventLogger.log("helper_ax_stage_started", payload: [

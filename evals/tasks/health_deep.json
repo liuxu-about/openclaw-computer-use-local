@@ -1,0 +1,9 @@
+{
+  "name": "bridge_health_deep",
+  "endpoint": "health",
+  "deep": true,
+  "success_checks": [
+    { "type": "ok" },
+    { "type": "has_readiness" }
+  ]
+}

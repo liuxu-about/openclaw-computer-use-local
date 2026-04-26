@@ -1,0 +1,16 @@
+{
+  "name": "frontmost_ax_observe",
+  "endpoint": "observe",
+  "request": {
+    "mode": "ax",
+    "max_nodes": 120
+  },
+  "success_checks": [
+    { "type": "source_in", "value": ["ax", "ax+vision", "vision"] },
+    { "type": "has_session_id" },
+    { "type": "has_scene_digest" },
+    { "type": "has_session_context" },
+    { "type": "has_ui_summary" },
+    { "type": "has_recommended_targets_min", "value": 0 }
+  ]
+}

@@ -25,6 +25,7 @@ This protocol currently implements:
 - AX-native actions for:
   - `focus`
   - `press`
+  - `select`
   - `set_value`
   - `append_text`
   - `scroll` (mapped to `AXScrollToVisible` when available)
@@ -45,7 +46,8 @@ This protocol currently implements:
   - `mode: ax_with_screenshot`
   - `mode: vision`
 - observation persistence for screenshot-relative coordinate translation
-- fuzzy stale-id remapping using stored element summaries from the original observation
+- lightweight session history with `session_id`, recent observation refs, recent action refs, and scene digests
+- fuzzy stale-id remapping using stored element summaries and semantic fingerprints from the original observation
 - `vision_click` execution with:
   - AX hit-test + `AXPress` when available
   - CGEvent left-click fallback when AX press is unavailable
@@ -57,8 +59,18 @@ This protocol currently implements:
   - residual-draft detection
   - sent-text appearance outside the input region
 - vision-fallback recommendation logic
+- `ui_summary` / `recommended_targets` observation summaries, including table/list visible-structure summaries
+- annotated screenshot overlays for AX and OCR candidates
+- overlay mark resolution for low-level actions, including AX marks such as `A1` and OCR marks such as `O1`
+- action-level verification metadata and suggested next actions
+- conservative bounded `computer_use` loop for low-risk deterministic tasks
+- risk assessment with approval-required status for sensitive intents
+- bridge-level approval requests, one-time approval tokens, and audit records
+- frontmost app/window guard before CGEvent-backed keyboard, mouse, drag, paste, and scroll actions
+- app profiles for submit/search strategy and sensitive-app classification
+- screenshot/OCR-assisted action verification via visual digests and targeted OCR evidence
+- screenshot persistence opt-out with `COMPUTER_USE_DISABLE_SCREENSHOT_PERSISTENCE=1` or `COMPUTER_USE_REDACT_SCREENSHOTS=1`
 
 Still TODO:
-- model-side image grounding / coordinate proposal
-- audit / approval hooks
-- screenshot/OCR-assisted verification for apps whose post-submit state is invisible to AX
+- model-side image grounding / coordinate proposal beyond overlay labels
+- broader app profile coverage and profile-specific eval tasks

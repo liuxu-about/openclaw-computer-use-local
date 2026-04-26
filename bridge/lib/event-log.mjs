@@ -6,6 +6,7 @@ const defaultLogPath = path.join(os.tmpdir(), "openclaw-computer-use-local-event
 const logFullPayloads = process.env.COMPUTER_USE_LOG_FULL_PAYLOADS === "1";
 const redactedScalarKeys = new Set([
   "matched_text",
+  "approval_token",
   "query",
   "task",
   "text",
@@ -13,7 +14,11 @@ const redactedScalarKeys = new Set([
 ]);
 const redactedContainerKeys = new Set([
   "elements",
+  "legend",
+  "overlay",
+  "recommended_targets",
   "tree",
+  "ui_summary",
 ]);
 
 export function resolveEventLogPath() {
@@ -49,7 +54,7 @@ function redactPlaceholder(value, key) {
     }
     return `[redacted:${normalized}]`;
   }
-  if (normalized === "path" && typeof value === "string" && value.includes("openclaw-computer-use-local")) {
+  if (normalized.endsWith("path") && typeof value === "string" && value.includes("openclaw-computer-use-local")) {
     return "[redacted:path]";
   }
   return undefined;

@@ -103,10 +103,10 @@ final class EventLogger: @unchecked Sendable {
         }
 
         let normalized = key.lowercased()
-        if ["matched_text", "query", "task", "text", "value"].contains(normalized) {
+        if ["approval_token", "matched_text", "query", "task", "text", "value"].contains(normalized) {
             return "[redacted]"
         }
-        if normalized == "tree" || normalized == "elements" {
+        if ["tree", "elements", "ui_summary", "recommended_targets", "overlay", "legend"].contains(normalized) {
             if let array = value as? [Any] {
                 return "[redacted:\(normalized):\(array.count)]"
             }
@@ -115,7 +115,7 @@ final class EventLogger: @unchecked Sendable {
             }
             return "[redacted:\(normalized)]"
         }
-        if normalized == "path",
+        if normalized.hasSuffix("path"),
            let path = value as? String,
            path.contains("openclaw-computer-use-local")
         {

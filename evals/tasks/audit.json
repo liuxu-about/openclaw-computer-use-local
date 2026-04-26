@@ -1,0 +1,11 @@
+{
+  "name": "computer_audit",
+  "endpoint": "audit",
+  "request": {
+    "limit": 5
+  },
+  "success_checks": [
+    { "type": "ok" },
+    { "type": "has_audit_records", "value": 0 }
+  ]
+}

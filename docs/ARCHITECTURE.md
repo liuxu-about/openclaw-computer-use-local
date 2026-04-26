@@ -82,12 +82,16 @@ Existing typed tools remain the OpenClaw-facing contract:
 - AX hit-test + CGEvent left-click fallback
 - screenshot-relative -> global coordinate translation for `vision_drag`
 - fallback recommendation logic
+- approval requests, one-time approval tokens, and audit records
+- screenshot/OCR-assisted action verification
+- semantic stale-id remap fingerprints using ancestor/sibling/descendant/action context
+- visible table/list summaries in `ui_summary`
+- cleanup/export controls for screenshot, overlay, and audit artifacts
+- local doctor script for helper, bridge, and macOS permission diagnostics
 - end-to-end JSON transport from bridge -> helper -> bridge
 
 ## What is still skeletal
 
 - model-side image grounding
-- approval and audit layers
-- stronger stale-id recovery across larger DOM/UI refreshes
-- screenshot/OCR-assisted verification for apps whose committed state stays invisible to AX
-- richer long-lived semantic sessions (today the daemon is warm, but task/session state is still lightweight)
+- richer app-specific profiles and eval coverage
+- local-only bootstrap automation beyond diagnostics

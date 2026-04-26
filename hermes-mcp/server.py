@@ -135,6 +135,7 @@ def create_server() -> FastMCP:
 
     @mcp.tool()
     def computer_observe(
+        session_id: Optional[str] = None,
         target_app: Optional[str] = None,
         target_window: Optional[str] = None,
         mode: Literal["ax", "ax_with_screenshot", "vision"] = "ax",
@@ -146,6 +147,7 @@ def create_server() -> FastMCP:
         Returns the latest AX snapshot, element ids, and optional screenshot metadata.
         """
         payload: Dict[str, Any] = {
+            "session_id": session_id,
             "target_app": target_app,
             "target_window": target_window,
             "mode": mode,
@@ -157,7 +159,7 @@ def create_server() -> FastMCP:
         return _bridge_call("POST", "/computer.observe", payload)
 
     @mcp.tool()
-    def computer_act(observation_id: str, actions: List[Dict[str, Any]]) -> str:
+    def computer_act(observation_id: str, actions: List[Dict[str, Any]], session_id: Optional[str] = None) -> str:
         """Perform element-level or fallback computer-use actions against a prior observation.
 
         Args:
@@ -165,6 +167,7 @@ def create_server() -> FastMCP:
             actions: Action objects such as press/focus/replace_text/submit/vision_click.
         """
         return _bridge_call("POST", "/computer.act", {
+            "session_id": session_id,
             "observation_id": observation_id,
             "actions": actions,
         })
@@ -178,23 +181,92 @@ def create_server() -> FastMCP:
     def computer_use(
         task: str,
         target_app: str,
+        session_id: Optional[str] = None,
         target_window: Optional[str] = None,
         approval_mode: Literal["strict", "normal"] = "normal",
         allow_vision_fallback: bool = True,
+        auto_execute: Optional[bool] = None,
+        max_steps: Optional[int] = None,
+        approval_token: Optional[str] = None,
     ) -> str:
         """High-level wrapper for a local computer-use task.
 
         Prefer the lower-level observe/act pair when you need precise multi-step control.
         """
         payload = {
+            "session_id": session_id,
             "task": task,
             "target_app": target_app,
             "target_window": target_window,
             "approval_mode": approval_mode,
             "allow_vision_fallback": allow_vision_fallback,
+            "auto_execute": auto_execute,
+            "max_steps": max_steps,
+            "approval_token": approval_token,
         }
         payload = {key: value for key, value in payload.items() if value is not None}
         return _bridge_call("POST", "/computer.use", payload)
+
+    @mcp.tool()
+    def computer_approval_approve(
+        approval_request_id: str,
+        approved_by: Optional[str] = None,
+        ttl_ms: Optional[int] = None,
+    ) -> str:
+        """Approve a pending local computer-use request and return a one-time approval token."""
+        payload = {
+            "approval_request_id": approval_request_id,
+            "approved_by": approved_by,
+            "ttl_ms": ttl_ms,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return _bridge_call("POST", "/computer.approval/approve", payload)
+
+    @mcp.tool()
+    def computer_approval_deny(
+        approval_request_id: str,
+        denied_by: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> str:
+        """Deny a pending local computer-use approval request."""
+        payload = {
+            "approval_request_id": approval_request_id,
+            "denied_by": denied_by,
+            "reason": reason,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return _bridge_call("POST", "/computer.approval/deny", payload)
+
+    @mcp.tool()
+    def computer_audit(limit: int = 50) -> str:
+        """Read recent local computer-use audit records."""
+        return _bridge_call("POST", "/computer.audit", {"limit": limit})
+
+    @mcp.tool()
+    def computer_audit_export(limit: int = 500) -> str:
+        """Export recent local computer-use audit records to a local JSON artifact."""
+        return _bridge_call("POST", "/computer.audit/export", {"limit": limit})
+
+    @mcp.tool()
+    def computer_cleanup(
+        dry_run: bool = False,
+        older_than_seconds: Optional[int] = None,
+        max_screenshots: Optional[int] = None,
+        audit_retention_days: Optional[int] = None,
+        include_overlays: bool = True,
+        include_file_names: bool = False,
+    ) -> str:
+        """Clean local screenshot, overlay, and audit artifacts according to retention settings."""
+        payload = {
+            "dry_run": dry_run,
+            "older_than_seconds": older_than_seconds,
+            "max_screenshots": max_screenshots,
+            "audit_retention_days": audit_retention_days,
+            "include_overlays": include_overlays,
+            "include_file_names": include_file_names,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return _bridge_call("POST", "/computer.cleanup", payload)
 
     return mcp
 

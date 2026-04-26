@@ -4,6 +4,8 @@ import Foundation
 final class ActionExecutor {
     private let accessibilityService: AccessibilityService
     private let ocrTextService = OCRTextService()
+    private let visualVerifier = VisualVerifier()
+    private let fingerprintBuilder = ElementFingerprintBuilder()
 
     private struct TargetedElement {
         let element: AXUIElement
@@ -53,16 +55,23 @@ final class ActionExecutor {
         var scene = accessibilityService.captureScene(targetNamed: targetHint, windowNamed: windowHint, maxNodes: 300)
 
         return request.actions.enumerated().map { index, action in
+            let beforeScene = scene
+            let visualBefore = visualSnapshotIfUseful(action: action, scene: beforeScene)
             let result = executeSingle(
                 index: index,
                 action: action,
                 scene: scene,
                 storedObservation: storedObservation
             )
+            var afterScene: SceneSnapshot?
+            var visualAfter: VisualVerificationSnapshot?
             if result.status == "ok" || result.status == "retryable" {
-                scene = accessibilityService.captureScene(targetNamed: targetHint, windowNamed: windowHint, maxNodes: 300)
+                let refreshed = accessibilityService.captureScene(targetNamed: targetHint, windowNamed: windowHint, maxNodes: 300)
+                scene = refreshed
+                afterScene = refreshed
+                visualAfter = visualSnapshotIfUseful(action: action, scene: refreshed)
             }
-            return result
+            return enrichResult(result, before: beforeScene, after: afterScene, visualBefore: visualBefore, visualAfter: visualAfter)
         }
     }
 
@@ -72,6 +81,7 @@ final class ActionExecutor {
         scene: SceneSnapshot,
         storedObservation: StoredObservation?
     ) -> ActionResult {
+        let action = actionResolvingOverlayMark(action, storedObservation: storedObservation)
         let route = routeForAction(action.type)
 
         switch action.type {
@@ -88,28 +98,64 @@ final class ActionExecutor {
                 errorCode: nil
             )
         case "vision_click":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "vision") {
+                return guardResult
+            }
             return performVisionClick(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "vision_click_text":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "vision") {
+                return guardResult
+            }
             return performVisionClickText(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "vision_drag":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "vision") {
+                return guardResult
+            }
             return performVisionDrag(index: index, action: action, storedObservation: storedObservation)
         case "key", "type", "keypress":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "keyboard") {
+                return guardResult
+            }
             return performKey(index: index, action: action)
         case "scroll":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "scroll") {
+                return guardResult
+            }
             return performScroll(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "scroll_to_bottom":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "scroll") {
+                return guardResult
+            }
             return performScrollToBottom(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "scroll_until_text_visible":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "scroll") {
+                return guardResult
+            }
             return performScrollUntilTextVisible(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "clear_focused_text":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "text_pipeline") {
+                return guardResult
+            }
             return performClearFocusedText(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "paste_text":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "text_pipeline") {
+                return guardResult
+            }
             return performPasteText(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "replace_text":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "text_pipeline") {
+                return guardResult
+            }
             return performReplaceText(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "compose_and_submit", "compose_and_send", "send_message":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "text_pipeline") {
+                return guardResult
+            }
             return performComposeAndSubmit(index: index, action: action, scene: scene, storedObservation: storedObservation)
         case "submit":
+            if let guardResult = frontmostGuard(index: index, action: action, scene: scene, route: "text_pipeline") {
+                return guardResult
+            }
             return performSubmit(index: index, action: action, scene: scene, storedObservation: storedObservation)
         default:
             guard accessibilityService.accessibilityTrusted() else {
@@ -175,6 +221,11 @@ final class ActionExecutor {
                     performFocus(index: index, element: resolved.element, summary: resolved.summary),
                     resolution: resolved
                 )
+            case "select":
+                return withResolutionContext(
+                    performSelect(index: index, element: resolved.element, summary: resolved.summary),
+                    resolution: resolved
+                )
             case "set_value":
                 return withResolutionContext(
                     performSetValue(
@@ -211,6 +262,87 @@ final class ActionExecutor {
         }
     }
 
+    private func frontmostGuard(index: Int, action: ComputerAction, scene: SceneSnapshot, route: String) -> ActionResult? {
+        guard let target = scene.target else {
+            return nil
+        }
+        let frontmost = accessibilityService.frontmostWindowInfo()
+        guard frontmost.bundleId == target.bundleId else {
+            return ActionResult(
+                index: index,
+                type: action.type,
+                route: route,
+                status: "blocked",
+                message: "Frontmost app changed before event synthesis. Expected \(target.appName) (\(target.bundleId)), but frontmost is \(frontmost.name) (\(frontmost.bundleId)).",
+                id: action.id,
+                errorCode: "target_not_frontmost"
+            )
+        }
+
+        if let expectedTitle = target.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !expectedTitle.isEmpty,
+           let actualTitle = frontmost.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !actualTitle.isEmpty,
+           !titlesProbablyMatch(expectedTitle, actualTitle)
+        {
+            return ActionResult(
+                index: index,
+                type: action.type,
+                route: route,
+                status: "blocked",
+                message: "Frontmost window changed before event synthesis. Expected \"\(expectedTitle)\", but frontmost window is \"\(actualTitle)\".",
+                id: action.id,
+                errorCode: "target_window_changed"
+            )
+        }
+        return nil
+    }
+
+    private func actionResolvingOverlayMark(_ action: ComputerAction, storedObservation: StoredObservation?) -> ComputerAction {
+        guard let mark = action.mark?.trimmingCharacters(in: .whitespacesAndNewlines), !mark.isEmpty else {
+            return action
+        }
+        guard let item = storedObservation?.overlay?.legend.first(where: { $0.mark.caseInsensitiveCompare(mark) == .orderedSame }) else {
+            return action
+        }
+
+        let bboxCenter = item.id == nil && action.x == nil && action.y == nil ? center(of: item.bbox) : nil
+        return ComputerAction(
+            type: action.type,
+            id: action.id ?? item.id,
+            text: action.text,
+            value: action.value,
+            keys: action.keys,
+            strategy: action.strategy,
+            direction: action.direction,
+            amount: action.amount,
+            ms: action.ms,
+            retryCount: action.retryCount,
+            mark: action.mark,
+            x: action.x ?? bboxCenter?.x,
+            y: action.y ?? bboxCenter?.y,
+            x2: action.x2,
+            y2: action.y2,
+            reason: action.reason
+        )
+    }
+
+    private func center(of bbox: [Double]?) -> (x: Double, y: Double)? {
+        guard let bbox, bbox.count == 4 else {
+            return nil
+        }
+        return (bbox[0] + bbox[2] / 2.0, bbox[1] + bbox[3] / 2.0)
+    }
+
+    private func titlesProbablyMatch(_ expected: String, _ actual: String) -> Bool {
+        let lhs = normalizedText(expected)
+        let rhs = normalizedText(actual)
+        guard !lhs.isEmpty, !rhs.isEmpty else {
+            return true
+        }
+        return lhs == rhs || lhs.contains(rhs) || rhs.contains(lhs)
+    }
+
     private func performVisionClick(
         index: Int,
         action: ComputerAction,
@@ -226,6 +358,37 @@ final class ActionExecutor {
                 message: "Accessibility permission is required for coordinate fallback actions.",
                 id: nil,
                 errorCode: "permission_denied"
+            )
+        }
+
+        if let elementId = action.id, action.x == nil || action.y == nil {
+            guard let resolved = resolveElement(
+                requestedId: elementId,
+                scene: scene,
+                storedObservation: storedObservation
+            ) else {
+                return ActionResult(
+                    index: index,
+                    type: "vision_click",
+                    route: "vision_mark",
+                    status: "stale",
+                    message: "Overlay mark resolved to element \(elementId), but that element is not available in the current AX snapshot.",
+                    id: elementId,
+                    errorCode: "stale_id"
+                )
+            }
+            let pressed = performPress(index: index, element: resolved.element, summary: resolved.summary)
+            return withResolutionContext(
+                ActionResult(
+                    index: pressed.index,
+                    type: "vision_click",
+                    route: "vision_mark_ax",
+                    status: pressed.status,
+                    message: "Overlay mark resolved to \(resolved.summary.id). \(pressed.message)",
+                    id: pressed.id,
+                    errorCode: pressed.errorCode
+                ),
+                resolution: resolved
             )
         }
 
@@ -359,6 +522,7 @@ final class ActionExecutor {
             amount: nil,
             ms: action.ms,
             retryCount: action.retryCount,
+            mark: nil,
             x: Double(center.x),
             y: Double(center.y),
             x2: nil,
@@ -1069,6 +1233,45 @@ final class ActionExecutor {
         )
     }
 
+    private func performSelect(index: Int, element: AXUIElement, summary: AxElementSummary) -> ActionResult {
+        if accessibilityService.isAttributeSettable(element, attribute: kAXSelectedAttribute as CFString) {
+            let error = accessibilityService.setAttribute(element, attribute: kAXSelectedAttribute as CFString, value: kCFBooleanTrue)
+            let result = resultFromAXError(
+                error,
+                index: index,
+                type: "select",
+                route: "ax",
+                id: summary.id,
+                successMessage: "Selected \(summary.role) \(summary.name ?? summary.description ?? summary.id)."
+            )
+            if result.status == "ok" {
+                return result
+            }
+        }
+
+        if summary.actions.contains(kAXPressAction as String) {
+            let error = accessibilityService.performAction(element, action: kAXPressAction as CFString)
+            return resultFromAXError(
+                error,
+                index: index,
+                type: "select",
+                route: "ax",
+                id: summary.id,
+                successMessage: "Selected \(summary.role) \(summary.name ?? summary.description ?? summary.id) through AXPress fallback."
+            )
+        }
+
+        return ActionResult(
+            index: index,
+            type: "select",
+            route: "ax",
+            status: "unsupported",
+            message: "Element \(summary.id) cannot be selected and does not expose AXPress.",
+            id: summary.id,
+            errorCode: "action_unsupported"
+        )
+    }
+
     private func performFocus(index: Int, element: AXUIElement, summary: AxElementSummary) -> ActionResult {
         guard accessibilityService.isAttributeSettable(element, attribute: kAXFocusedAttribute as CFString) else {
             return ActionResult(
@@ -1651,10 +1854,21 @@ final class ActionExecutor {
             return nil
         }
 
+        let currentFingerprints = fingerprintBuilder.fingerprints(tree: scene.tree, elements: scene.elements)
+        let priorFingerprint = storedObservation?.elementFingerprints?[requestedId]
+
         let candidates = scene.elements.values
             .filter { $0.enabled || priorSummary.enabled == false || $0.focused || $0.role == priorSummary.role }
             .map { candidate -> (summary: AxElementSummary, score: Double) in
-                (candidate, remapScore(from: priorSummary, to: candidate))
+                (
+                    candidate,
+                    remapScore(
+                        from: priorSummary,
+                        priorFingerprint: priorFingerprint,
+                        to: candidate,
+                        candidateFingerprint: currentFingerprints[candidate.id]
+                    )
+                )
             }
             .filter { $0.score >= 55 }
             .sorted { lhs, rhs in
@@ -1684,7 +1898,12 @@ final class ActionExecutor {
         )
     }
 
-    private func remapScore(from previous: AxElementSummary, to candidate: AxElementSummary) -> Double {
+    private func remapScore(
+        from previous: AxElementSummary,
+        priorFingerprint: ElementFingerprint?,
+        to candidate: AxElementSummary,
+        candidateFingerprint: ElementFingerprint?
+    ) -> Double {
         var score = 0.0
 
         if previous.role == candidate.role {
@@ -1710,8 +1929,52 @@ final class ActionExecutor {
         if previous.actions.contains(kAXPressAction as String) == candidate.actions.contains(kAXPressAction as String) {
             score += 4
         }
+        score += fingerprintSimilarity(priorFingerprint, candidateFingerprint) * 34
+        if let priorFingerprint,
+           let candidateFingerprint,
+           priorFingerprint.semanticHash == candidateFingerprint.semanticHash
+        {
+            score += 16
+        }
+        if let priorFingerprint,
+           let candidateFingerprint,
+           !priorFingerprint.actionSignature.isEmpty,
+           priorFingerprint.actionSignature == candidateFingerprint.actionSignature
+        {
+            score += 6
+        }
 
         return score
+    }
+
+    private func fingerprintSimilarity(_ lhs: ElementFingerprint?, _ rhs: ElementFingerprint?) -> Double {
+        guard let lhs, let rhs else {
+            return 0
+        }
+
+        var score = 0.0
+        if lhs.role == rhs.role {
+            score += 0.18
+        } else if lhs.roleFamily == rhs.roleFamily {
+            score += 0.08
+        }
+        if !lhs.normalizedName.isEmpty {
+            score += tokenSimilarity(lhs.normalizedName, rhs.normalizedName) * 0.16
+        }
+        if !lhs.normalizedValue.isEmpty {
+            score += tokenSimilarity(lhs.normalizedValue, rhs.normalizedValue) * 0.14
+        }
+        if !lhs.normalizedDescription.isEmpty {
+            score += tokenSimilarity(lhs.normalizedDescription, rhs.normalizedDescription) * 0.12
+        }
+        score += tokenSetSimilarity(lhs.ancestorRoles, rhs.ancestorRoles) * 0.10
+        score += tokenSetSimilarity(lhs.siblingLabelsBefore, rhs.siblingLabelsBefore) * 0.10
+        score += tokenSetSimilarity(lhs.siblingLabelsAfter, rhs.siblingLabelsAfter) * 0.10
+        score += tokenSetSimilarity(lhs.descendantText, rhs.descendantText) * 0.16
+        if lhs.bboxBucket != nil, lhs.bboxBucket == rhs.bboxBucket {
+            score += 0.04
+        }
+        return min(1.0, score)
     }
 
     private func roleFamily(_ role: String) -> String {
@@ -1724,6 +1987,149 @@ final class ActionExecutor {
             return "scroll"
         default:
             return role
+        }
+    }
+
+    private func enrichResult(
+        _ result: ActionResult,
+        before: SceneSnapshot,
+        after: SceneSnapshot?,
+        visualBefore: VisualVerificationSnapshot?,
+        visualAfter: VisualVerificationSnapshot?
+    ) -> ActionResult {
+        let beforeDigest = sceneDigest(before)
+        let afterDigest = after.map(sceneDigest)
+        let sceneChanged = afterDigest != nil && afterDigest != beforeDigest
+        let visualChanged = visualBefore?.digest != nil &&
+            visualAfter?.digest != nil &&
+            visualBefore?.digest != visualAfter?.digest
+        var evidence: [String] = []
+        var ocrEvidence: [String] = []
+
+        switch result.status {
+        case "ok":
+            evidence.append("helper_status_ok")
+        case "retryable":
+            evidence.append("helper_status_retryable")
+        case "stale":
+            evidence.append("element_id_stale")
+        case "blocked":
+            evidence.append("blocked_before_dispatch")
+        case "invalid":
+            evidence.append("invalid_request")
+        default:
+            evidence.append("helper_status_\(result.status)")
+        }
+
+        if after == nil {
+            evidence.append("no_post_action_observation")
+        } else if sceneChanged {
+            evidence.append("scene_digest_changed")
+        } else {
+            evidence.append("scene_digest_unchanged")
+        }
+
+        if after != nil, focusedElementId(before) != focusedElementId(after) {
+            evidence.append("focused_element_changed")
+        }
+        if visualChanged {
+            evidence.append("visual_digest_changed")
+        } else if visualBefore != nil || visualAfter != nil {
+            evidence.append("visual_digest_unchanged")
+        }
+        ocrEvidence.append(contentsOf: visualBefore?.ocrTexts.map { "before:\($0)" } ?? [])
+        ocrEvidence.append(contentsOf: visualAfter?.ocrTexts.map { "after:\($0)" } ?? [])
+        if !ocrEvidence.isEmpty {
+            evidence.append("ocr_evidence_available")
+        }
+
+        let retryable = result.status == "retryable" || result.status == "stale"
+        let verified = result.status == "ok"
+        let confidence: Double
+        if result.status == "ok" {
+            if sceneChanged && visualChanged {
+                confidence = 0.94
+            } else if sceneChanged || visualChanged {
+                confidence = 0.86
+            } else if !ocrEvidence.isEmpty {
+                confidence = 0.78
+            } else {
+                confidence = 0.64
+            }
+        } else if result.status == "retryable" {
+            confidence = visualChanged || !ocrEvidence.isEmpty ? 0.42 : 0.32
+        } else if result.status == "stale" {
+            confidence = 0.24
+        } else if result.status == "blocked" || result.status == "invalid" {
+            confidence = 0.08
+        } else {
+            confidence = 0.18
+        }
+
+        return ActionResult(
+            index: result.index,
+            type: result.type,
+            route: result.route,
+            status: result.status,
+            message: result.message,
+            id: result.id,
+            errorCode: result.errorCode,
+            retryable: retryable,
+            verification: ActionVerification(
+                verified: verified,
+                confidence: confidence,
+                evidence: evidence,
+                beforeDigest: beforeDigest,
+                afterDigest: afterDigest,
+                visualBeforeDigest: visualBefore?.digest,
+                visualAfterDigest: visualAfter?.digest,
+                ocrEvidence: ocrEvidence.isEmpty ? nil : ocrEvidence
+            ),
+            suggestedNextAction: suggestedNextAction(for: result)
+        )
+    }
+
+    private func visualSnapshotIfUseful(action: ComputerAction, scene: SceneSnapshot) -> VisualVerificationSnapshot? {
+        let queryTexts = visualQueryTexts(for: action)
+        if queryTexts.isEmpty,
+           !["scroll", "scroll_to_bottom", "scroll_until_text_visible", "vision_click", "vision_click_text", "vision_drag", "submit"].contains(action.type)
+        {
+            return nil
+        }
+        return visualVerifier.snapshot(scene: scene, queryTexts: queryTexts)
+    }
+
+    private func visualQueryTexts(for action: ComputerAction) -> [String] {
+        switch action.type {
+        case "replace_text", "paste_text", "append_text", "set_value", "compose_and_submit", "scroll_until_text_visible", "vision_click_text":
+            return [action.text, action.value].compactMap { $0 }
+        default:
+            return []
+        }
+    }
+
+    private func focusedElementId(_ scene: SceneSnapshot?) -> String? {
+        scene?.elements.values.first(where: { $0.focused })?.id
+    }
+
+    private func suggestedNextAction(for result: ActionResult) -> String? {
+        switch result.errorCode {
+        case "stale_id":
+            return "Run computer_observe again and retry with the latest element id."
+        case "missing_screenshot":
+            return "Run computer_observe with include_screenshot=true before using vision text actions."
+        case "text_not_found":
+            return "Use scroll_until_text_visible or re-observe with a screenshot before retrying."
+        case "submission_unverified":
+            return "Re-observe the composer and inspect whether the draft is still present."
+        case "permission_denied":
+            return "Grant the required macOS Accessibility or Screen Recording permission, then retry."
+        case "coordinate_translation_failed":
+            return "Use coordinates from the latest screenshot observation."
+        case "verification_failed":
+            return "Re-observe and retry with replace_text or paste_text after focusing the target."
+        default:
+            return result.status == "retryable" ? "Re-observe the target window and retry a smaller action." : nil
         }
     }
 
@@ -1749,6 +2155,34 @@ final class ActionExecutor {
         }
         let overlap = Double(leftTokens.intersection(rightTokens).count) / Double(union.count)
         return overlap
+    }
+
+    private func tokenSimilarity(_ lhs: String, _ rhs: String) -> Double {
+        let left = normalizedText(lhs)
+        let right = normalizedText(rhs)
+        guard !left.isEmpty, !right.isEmpty else {
+            return 0
+        }
+        if left == right {
+            return 1
+        }
+        if left.contains(right) || right.contains(left) {
+            return 0.82
+        }
+        return tokenSetSimilarity(
+            left.split(separator: " ").map(String.init),
+            right.split(separator: " ").map(String.init)
+        )
+    }
+
+    private func tokenSetSimilarity(_ lhs: [String], _ rhs: [String]) -> Double {
+        let left = Set(lhs.map { normalizedText($0) }.filter { !$0.isEmpty })
+        let right = Set(rhs.map { normalizedText($0) }.filter { !$0.isEmpty })
+        let union = left.union(right)
+        guard !union.isEmpty else {
+            return 0
+        }
+        return Double(left.intersection(right).count) / Double(union.count)
     }
 
     private func normalizedText(_ value: String?) -> String {
@@ -2274,6 +2708,7 @@ final class ActionExecutor {
             amount: action.amount,
             ms: ms ?? action.ms,
             retryCount: retryCount ?? action.retryCount,
+            mark: action.mark,
             x: action.x,
             y: action.y,
             x2: action.x2,
@@ -2301,22 +2736,7 @@ final class ActionExecutor {
     }
 
     private func sceneDigest(_ scene: SceneSnapshot) -> String {
-        let material = scene.elements.values
-            .sorted { $0.id < $1.id }
-            .prefix(96)
-            .map {
-                [
-                    $0.id,
-                    $0.role,
-                    normalizedText($0.name),
-                    normalizedText($0.value),
-                    normalizedText($0.description),
-                    $0.focused ? "1" : "0",
-                    $0.path
-                ].joined(separator: "|")
-            }
-            .joined(separator: "||")
-        return stableDigest(material)
+        SceneDigest.compute(scene)
     }
 
     private func stableDigest(_ input: String) -> String {

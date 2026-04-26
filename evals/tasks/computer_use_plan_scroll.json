@@ -1,0 +1,19 @@
+{
+  "name": "computer_use_plan_scroll",
+  "endpoint": "use",
+  "request": {
+    "task": "scroll down",
+    "target_app": "Codex",
+    "allow_vision_fallback": false,
+    "auto_execute": false,
+    "max_steps": 1
+  },
+  "success_checks": [
+    { "type": "has_session_id" },
+    { "type": "has_session_context" },
+    { "type": "has_steps_min", "value": 3 },
+    { "type": "has_planned_actions_min", "value": 1 },
+    { "type": "risk_level_in", "value": ["low"] },
+    { "type": "status_in", "value": ["planned"] }
+  ]
+}

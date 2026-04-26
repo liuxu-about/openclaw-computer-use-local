@@ -15,6 +15,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "check:all": "npm run check && swift build --package-path ./helper-swift",
+    "eval": "node ./evals/runner.mjs",
+    "doctor": "node ./scripts/doctor.mjs",
     "helper:build": "swift build --package-path ./helper-swift",
     "helper:health": "swift run --package-path ./helper-swift openclaw-computer-helper health",
     "bridge": "node ./bridge/server.mjs",

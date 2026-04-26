@@ -1,6 +1,23 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import {
+  approveApprovalRequest,
+  createApprovalRequest,
+  denyApprovalRequest,
+  exportAudit,
+  listAudit,
+  pruneAudit,
+  publicApprovalRequest,
+  resolveAuditLogPath,
+  resolveApprovalStoreDir,
+  validateAndConsumeApprovalToken,
+} from "./lib/approval-store.mjs";
 import { appendEvent, resolveEventLogPath } from "./lib/event-log.mjs";
+import {
+  cleanupArtifacts,
+  resolveArtifactRootDir,
+  retentionConfig,
+} from "./lib/retention.mjs";
 import {
   getActiveHelperInvocations,
   getHelperDaemonStatus,
@@ -81,6 +98,56 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function booleanField(payload, snakeName, camelName) {
+  if (typeof payload?.[snakeName] === "boolean") {
+    return payload[snakeName];
+  }
+  if (typeof payload?.[camelName] === "boolean") {
+    return payload[camelName];
+  }
+  return false;
+}
+
+function healthReadiness(helperHealth, helperError = null) {
+  const checks = [];
+  if (helperError) {
+    checks.push({
+      id: "helper",
+      ok: false,
+      message: "Swift helper did not respond to deep health.",
+      fix: "Run npm run helper:build, then retry /health?deep=1. Check bridge helper command/path if it still fails.",
+    });
+  } else {
+    checks.push({
+      id: "helper",
+      ok: true,
+      message: "Swift helper responded.",
+      fix: null,
+    });
+    checks.push({
+      id: "accessibility",
+      ok: booleanField(helperHealth, "ax_trusted", "axTrusted"),
+      message: "macOS Accessibility permission is required for AX observation and element actions.",
+      fix: "Open System Settings -> Privacy & Security -> Accessibility, then enable the terminal/app running the bridge.",
+    });
+    checks.push({
+      id: "screen_recording",
+      ok: booleanField(helperHealth, "screen_recording_trusted", "screenRecordingTrusted"),
+      message: "macOS Screen Recording permission is required for screenshot, overlay, and OCR fallback.",
+      fix: "Open System Settings -> Privacy & Security -> Screen Recording, then enable the terminal/app running the bridge.",
+    });
+  }
+
+  const suggestions = checks
+    .filter((check) => !check.ok && check.fix)
+    .map((check) => check.fix);
+  return {
+    ready: checks.every((check) => check.ok),
+    checks,
+    suggestions,
+  };
+}
+
 async function readJson(req) {
   const chunks = [];
   let total = 0;
@@ -150,6 +217,103 @@ async function handleHelper(command, req, res) {
   }
 }
 
+async function handleComputerUse(req, res) {
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+  try {
+    const payload = await readJson(req);
+    appendEvent("bridge_request_started", {
+      request_id: requestId,
+      command: "use",
+      method: req.method,
+      path: req.url,
+      payload,
+    });
+
+    const approvalToken = typeof payload.approval_token === "string" ? payload.approval_token.trim() : "";
+    if (approvalToken) {
+      const validation = validateAndConsumeApprovalToken({
+        token: approvalToken,
+        payload,
+        bridgeRequestId: requestId,
+      });
+      if (!validation.ok) {
+        const responsePayload = {
+          ok: false,
+          status: "approval_invalid",
+          error: validation.error,
+          _meta: {
+            request_id: requestId,
+            command: "use",
+            duration_ms: Date.now() - startedAt,
+          },
+        };
+        appendEvent("bridge_request_failed", {
+          request_id: requestId,
+          command: "use",
+          duration_ms: Date.now() - startedAt,
+          error: validation.error,
+        });
+        sendJson(res, 403, responsePayload);
+        return;
+      }
+      appendEvent("bridge_approval_token_accepted", {
+        request_id: requestId,
+        approval_request_id: validation.approval_request_id,
+      });
+    }
+
+    const timeoutMs = estimateHelperTimeoutMs("use", payload);
+    const result = await invokeHelper("use", payload, { requestId, timeoutMs });
+    const responsePayload = {
+      ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }),
+      _meta: {
+        request_id: requestId,
+        command: "use",
+        duration_ms: Date.now() - startedAt,
+      },
+    };
+
+    if (
+      responsePayload?.status === "approval_required" &&
+      responsePayload?.risk?.requires_approval &&
+      !approvalToken
+    ) {
+      const approvalRequest = createApprovalRequest({
+        bridgeRequestId: requestId,
+        payload,
+        helperResult: responsePayload,
+      });
+      responsePayload.approval_request = publicApprovalRequest(approvalRequest);
+    }
+
+    appendEvent("bridge_request_succeeded", {
+      request_id: requestId,
+      command: "use",
+      duration_ms: Date.now() - startedAt,
+      response: responsePayload,
+    });
+    sendJson(res, 200, responsePayload);
+  } catch (error) {
+    const responsePayload = {
+      ok: false,
+      error: String(error instanceof Error ? error.message : error),
+      _meta: {
+        request_id: requestId,
+        command: "use",
+        duration_ms: Date.now() - startedAt,
+      },
+    };
+    appendEvent("bridge_request_failed", {
+      request_id: requestId,
+      command: "use",
+      duration_ms: Date.now() - startedAt,
+      error,
+    });
+    sendJson(res, 500, responsePayload);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (!req.url) {
@@ -168,6 +332,10 @@ const server = http.createServer(async (req, res) => {
           host,
           port,
           event_log: resolveEventLogPath(),
+          audit_log: resolveAuditLogPath(),
+          approval_store: resolveApprovalStoreDir(),
+          artifact_root: resolveArtifactRootDir(),
+          retention: retentionConfig(),
           helper: resolveHelperLaunch(),
           helper_daemon: getHelperDaemonStatus(),
           active_invocations: getActiveHelperInvocations(),
@@ -180,10 +348,15 @@ const server = http.createServer(async (req, res) => {
         const health = await invokeHelper("health", {}, { requestId, timeoutMs: estimateHelperTimeoutMs("health", {}) });
         sendJson(res, 200, {
           ...(health && typeof health === "object" && !Array.isArray(health) ? health : { result: health }),
+          readiness: healthReadiness(health),
           bridge: {
             host,
             port,
             event_log: resolveEventLogPath(),
+            audit_log: resolveAuditLogPath(),
+            approval_store: resolveApprovalStoreDir(),
+            artifact_root: resolveArtifactRootDir(),
+            retention: retentionConfig(),
             helper: resolveHelperLaunch(),
             helper_daemon: getHelperDaemonStatus(),
             active_invocations: getActiveHelperInvocations(),
@@ -198,10 +371,15 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 500, {
           ok: false,
           error: String(error instanceof Error ? error.message : error),
+          readiness: healthReadiness(null, error),
           bridge: {
             host,
             port,
             event_log: resolveEventLogPath(),
+            audit_log: resolveAuditLogPath(),
+            approval_store: resolveApprovalStoreDir(),
+            artifact_root: resolveArtifactRootDir(),
+            retention: retentionConfig(),
             helper: resolveHelperLaunch(),
             helper_daemon: getHelperDaemonStatus(),
             active_invocations: getActiveHelperInvocations(),
@@ -246,7 +424,67 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === "POST" && url.pathname === "/computer.use") {
-      await handleHelper("use", req, res);
+      await handleComputerUse(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/computer.approval/approve") {
+      const payload = await readJson(req);
+      const result = approveApprovalRequest({
+        approvalRequestId: payload.approval_request_id,
+        approvedBy: payload.approved_by,
+        ttlMs: payload.ttl_ms,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/computer.approval/deny") {
+      const payload = await readJson(req);
+      const result = denyApprovalRequest({
+        approvalRequestId: payload.approval_request_id,
+        deniedBy: payload.denied_by,
+        reason: payload.reason,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/computer.audit") {
+      sendJson(res, 200, {
+        ok: true,
+        audit_log: resolveAuditLogPath(),
+        records: listAudit({ limit: url.searchParams.get("limit") || 50 }),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/computer.audit") {
+      const payload = await readJson(req);
+      sendJson(res, 200, {
+        ok: true,
+        audit_log: resolveAuditLogPath(),
+        records: listAudit({ limit: payload.limit || 50 }),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/computer.audit/export") {
+      const payload = await readJson(req);
+      const result = exportAudit({ limit: payload.limit || 500 });
+      appendEvent("bridge_audit_exported", result);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/computer.cleanup") {
+      const payload = await readJson(req);
+      const artifacts = cleanupArtifacts(payload);
+      const audit = pruneAudit({
+        retentionDays: payload.audit_retention_days,
+        dryRun: payload.dry_run,
+      });
+      const result = {
+        ok: true,
+        artifacts,
+        audit,
+      };
+      appendEvent("bridge_cleanup", result);
+      sendJson(res, 200, result);
       return;
     }
 

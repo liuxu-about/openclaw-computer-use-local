@@ -53,7 +53,7 @@ Recommended low-level flow:
 1. `mcp_computer_use_local_computer_observe`
 2. `mcp_computer_use_local_computer_act`
 
-Prefer element ids from observe results. Use coordinate-based `vision_click` / `vision_drag` only when AX is sparse and screenshot metadata is present.
+Prefer element ids or overlay marks from observe results. Use coordinate-based `vision_click` / `vision_drag` only when AX is sparse and screenshot metadata is present.
 
 ## Troubleshooting notes
 
